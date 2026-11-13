@@ -1,0 +1,83 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智能垃圾分类识别与投放指导系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <h1 class="site-title">智能垃圾分类识别与投放指导</h1>
+      <p class="site-subtitle">上传图片 · 自动识别 · 四分类投放建议</p>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 1. 上传区 -->
+    <section class="panel">
+      <h2 class="panel__title"><span class="step">1</span>上传图片</h2>
+
+      <form id="upload-form" class="upload-form" novalidate>
+        <label class="dropzone" for="image-input">
+          <input id="image-input" class="dropzone__input" type="file"
+                 accept="image/jpeg,image/png,.jpg,.jpeg,.png">
+          <span class="dropzone__text">点击选择图片</span>
+          <span class="dropzone__hint">支持 jpg / jpeg / png，单张不超过 10MB</span>
+        </label>
+
+        <p id="file-name" class="file-name">未选择文件</p>
+
+        <div class="field-row">
+          <label class="field">
+            <span class="field__label">城市</span>
+            <select id="city-select" class="field__control">
+              <option value="changsha" selected>长沙</option>
+              <option value="beijing">北京</option>
+              <option value="shanghai">上海</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">场景</span>
+            <select id="scene-select" class="field__control">
+              <option value="campus" selected>校园</option>
+              <option value="residential">小区</option>
+              <option value="office">写字楼</option>
+            </select>
+          </label>
+        </div>
+
+        <button id="submit-btn" class="btn-primary" type="submit">开始识别</button>
+      </form>
+
+      <p id="error-box" class="error-box" role="alert" hidden></p>
+    </section>
+
+    <!-- 2. 识别结果区 -->
+    <section class="panel">
+      <h2 class="panel__title"><span class="step">2</span>识别结果</h2>
+
+      <div class="preview">
+        <div id="preview-wrap" class="preview__wrap">
+          <img id="preview-img" class="preview__img" alt="待识别图片预览" hidden>
+          <canvas id="overlay-canvas" class="preview__canvas"></canvas>
+        </div>
+        <p id="preview-empty" class="preview__empty">尚未选择图片</p>
+      </div>
+
+      <ul id="detection-list" class="detection-list"></ul>
+    </section>
+
+    <!-- 3. 投放指导区 -->
+    <section class="panel">
+      <h2 class="panel__title"><span class="step">3</span>投放指导</h2>
+      <p id="summary" class="summary"></p>
+      <ul id="advice-list" class="advice-list"></ul>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
