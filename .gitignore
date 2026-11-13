@@ -1,0 +1,79 @@
+# ===== 密钥与环境 =====
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+*.key
+*.pem
+
+# ===== 模型文件（通过 MODEL_PATH 挂载，不进仓库）=====
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+models/
+weights/
+best.pt
+best.onnx
+last.pt
+
+# ===== 数据集与训练输出 =====
+data/raw/
+data/processed/
+datasets/
+runs/
+train/runs/
+train/datasets/
+*.cache
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ===== 测试与覆盖率 =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ===== 日志与临时文件 =====
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+
+# ===== Jupyter（如果训练用 notebook）=====
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ===== Docker 本地覆盖 =====
+docker-compose.override.yml
+.docker/
