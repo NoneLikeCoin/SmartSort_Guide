@@ -18,6 +18,31 @@ from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
+# ------------------------------------------------------------------ .env 加载
+
+
+def _load_dotenv(path):
+    """轻量 .env 加载（零依赖）：系统环境变量优先，.env 只补缺失的变量。
+
+    支持 KEY=VALUE、# 注释与引号包裹的值；任何情况下不打印值，避免密钥泄漏。
+    """
+    if not os.path.isfile(path):
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+# 路由注册前加载项目根目录 .env（文件不存在则跳过，MOCK 等配置即可生效）
+_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
 # ------------------------------------------------------------------ 基础配置
 
 # 图片体积上限：10MB

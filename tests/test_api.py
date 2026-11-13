@@ -5,6 +5,9 @@
 """
 
 import io
+import os
+
+import app as app_module
 
 CONTRACT_DETECT_KEYS = {"request_id", "detections", "image_size", "elapsed_ms"}
 CONTRACT_ADVISE_KEYS = {"request_id", "items", "summary", "elapsed_ms"}
@@ -222,3 +225,40 @@ class TestHealth:
         data = resp.get_json()
         assert data["llm_configured"] is True
         assert secret not in resp.get_data(as_text=True)
+
+
+# ------------------------------------------------------------------ .env 加载
+
+
+class TestDotenv:
+    def _write_env(self, tmp_path, text):
+        env_file = tmp_path / ".env"
+        env_file.write_text(text, encoding="utf-8")
+        return str(env_file)
+
+    def test_parses_and_fills_missing(self, tmp_path):
+        """.env 中的 KEY=VALUE 写入环境；注释、空行、非法行跳过；引号剥除。"""
+        path = self._write_env(
+            tmp_path,
+            "# 注释行\n"
+            "MOCK=1\n"
+            "MODEL_PATH='D:/models/best.onnx'\n"
+            "\n"
+            'DEEPSEEK_API_KEY="sk-from-dotenv"\n'
+            "这一行没有等号\n",
+        )
+        app_module._load_dotenv(path)
+        assert os.environ["MOCK"] == "1"
+        assert os.environ["MODEL_PATH"] == "D:/models/best.onnx"
+        assert os.environ["DEEPSEEK_API_KEY"] == "sk-from-dotenv"
+
+    def test_system_env_wins_over_dotenv(self, monkeypatch, tmp_path):
+        """系统环境变量优先：.env 不得覆盖已存在的变量。"""
+        monkeypatch.setenv("MOCK", "0")
+        path = self._write_env(tmp_path, "MOCK=1\n")
+        app_module._load_dotenv(path)
+        assert os.environ["MOCK"] == "0"
+
+    def test_missing_file_is_noop(self, tmp_path):
+        """无 .env 文件时静默跳过（不影响以纯环境变量启动）。"""
+        app_module._load_dotenv(str(tmp_path / "not-exist.env"))
