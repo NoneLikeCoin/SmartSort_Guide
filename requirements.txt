@@ -1,0 +1,13 @@
+# 运行环境依赖（与训练环境严格分离）。
+# 禁止在此引入 torch / ultralytics —— 它们只属于 train/ + requirements-train.txt。
+# 版本锁定说明：均钉在本机开发环境实测通过的版本（Python 3.12.6）。
+
+flask==3.1.2                        # Web 框架：路由与请求处理
+numpy==2.2.6                        # 图像数组处理与预处理
+onnxruntime==1.28.0                 # YOLOv8 ONNX 推理引擎
+opencv-python-headless==4.12.0.88   # 图片解码、Resize、NMS（headless 版，容器无 GUI 依赖）
+openai==2.47.0                      # DeepSeek 兼容接口客户端。原定 1.14.0，因本机运行时
+                                    # 已安装 2.47.0（降级会波及共用该解释器的其他项目），
+                                    # 且本仓库仅使用两版本一致的 chat.completions+tools 接口，
+                                    # 故锁定实测通过的 2.47.0。
+pytest==9.1.1                       # 测试运行器（pytest tests/）

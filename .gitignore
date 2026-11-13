@@ -26,6 +26,7 @@ datasets/
 runs/
 train/runs/
 train/datasets/
+train/dataset/
 *.cache
 
 # ===== Python =====

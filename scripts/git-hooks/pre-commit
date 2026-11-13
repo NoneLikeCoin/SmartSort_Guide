@@ -1,0 +1,13 @@
+#!/bin/sh
+# AGENTS.md 门禁："未通过测试不得提交"。
+# 启用方式（每个克隆执行一次）：git config core.hooksPath scripts/git-hooks
+cd "$(git rev-parse --show-toplevel)" || exit 1
+python -m pytest tests/ -q
+status=$?
+if [ $status -ne 0 ]; then
+    echo ""
+    echo "pre-commit 拦截：pytest tests/ 未通过（exit=$status），禁止提交。"
+    echo "如需启用门禁：git config core.hooksPath scripts/git-hooks"
+    exit 1
+fi
+exit 0

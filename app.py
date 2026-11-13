@@ -5,7 +5,9 @@
 职责边界：
   1. 只负责路由注册、请求参数校验、统一错误响应；
   2. MOCK=1 时使用 _mock_* 函数返回固定数据（不加载模型、不调用外部 API）；
-  3. MOCK!=1 时检测与建议接口直接返回 503，提示能力尚未就绪。
+  3. MOCK!=1 时 /detect 调用 services.detector 真实推理，模型未就绪返回 503；
+     /advise 调用 services.advisor 的 DeepSeek 智能体，密钥缺失返回 503；
+  4. /health 在真实模式下探测模型文件与密钥配置，如实报告就绪状态。
 """
 
 import os
@@ -91,6 +93,53 @@ def _error(code, message, status):
 def _is_mock():
     """当前是否运行在 mock 模式（环境变量 MOCK=1）。"""
     return os.environ.get("MOCK", "").strip() == "1"
+
+
+# 真实检测器单例：非 mock 模式下首次请求时创建，成功加载后复用。
+_detector = None
+
+
+def _get_detector():
+    """返回 YoloDetector 单例；模型未就绪或依赖缺失时返回 None（上层转 503）。
+
+    services.detector 依赖 onnxruntime / opencv，采用惰性导入：
+    MOCK=1 模式下即使未安装这些依赖、未配置模型也能正常启动（硬性约束）。
+    """
+    global _detector
+    if _detector is not None:
+        return _detector
+    try:
+        from services.detector import YoloDetector
+    except ImportError as exc:
+        app.logger.warning("推理依赖缺失，无法启用真实检测：%s", exc)
+        return None
+    try:
+        _detector = YoloDetector()
+    except Exception as exc:  # ModelNotReadyError 及 onnxruntime 加载期异常
+        app.logger.warning("模型未就绪：%s", exc)
+        return None
+    return _detector
+
+
+def _probe_model_loaded():
+    """/health 用：真实模式下探测模型就绪状态。
+
+    优先报告已加载成功的检测器；否则仅探测 MODEL_PATH 文件是否存在。
+    文件存在不代表一定可加载，真实校验发生在首次 /detect（失败即降级 503）。
+    """
+    if _is_mock():
+        return False
+    if _detector is not None:
+        return True
+    path = os.environ.get("MODEL_PATH", "").strip()
+    return bool(path and os.path.isfile(path))
+
+
+def _probe_llm_configured():
+    """/health 用：真实模式下是否已配置 DeepSeek 密钥（只探测，不读取值）。"""
+    if _is_mock():
+        return False
+    return bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
 
 
 def _new_request_id():
@@ -185,13 +234,13 @@ def index():
 
 @app.route("/health", methods=["GET"])
 def health():
-    """健康检查：mock 阶段不加载模型、不配置大模型。"""
+    """健康检查：真实模式探测模型文件与密钥配置；mock 模式一律报未就绪。"""
     return jsonify(
         {
             "status": "ok",
             "mock": _is_mock(),
-            "model_loaded": False,
-            "llm_configured": False,
+            "model_loaded": _probe_model_loaded(),
+            "llm_configured": _probe_llm_configured(),
         }
     )
 
@@ -221,9 +270,29 @@ def detect():
     if not _looks_like_image(raw, ext):
         return _error("INVALID_IMAGE", "图片无法解析，请上传有效的 jpg 或 png 图片。", 400)
 
-    # ---- 非 mock 模式：模型尚未接入 ----
+    # ---- 非 mock 模式：真实 YOLOv8 ONNX 推理 ----
     if not _is_mock():
-        return _error("MODEL_NOT_READY", "识别模型尚未就绪，请稍后重试。", 503)
+        detector = _get_detector()
+        if detector is None:
+            return _error("MODEL_NOT_READY", "识别模型尚未就绪，请稍后重试。", 503)
+
+        from services.detector import ImageDecodeError
+
+        try:
+            detections, img_width, img_height = detector.detect(raw)
+        except ImageDecodeError:
+            return _error("INVALID_IMAGE", "无法解码上传的图片。", 400)
+        except Exception:  # 兜底，避免内部异常信息外泄
+            return _error("DETECT_FAILED", "图片识别失败，请重试。", 500)
+
+        return jsonify(
+            {
+                "request_id": request_id,
+                "detections": detections,
+                "image_size": {"width": img_width, "height": img_height},
+                "elapsed_ms": _elapsed_ms(start_ts),
+            }
+        )
 
     # ---- mock 模式：返回固定检测结果 ----
     try:
@@ -288,9 +357,30 @@ def advise():
 
         clean_detections.append({"class": class_name, "confidence": float(confidence)})
 
-    # ---- 非 mock 模式：大模型尚未配置 ----
+    # ---- 非 mock 模式：DeepSeek 智能体工具调用 ----
     if not _is_mock():
-        return _error("LLM_UNAVAILABLE", "投放建议服务尚未配置，请稍后重试。", 503)
+        try:
+            from services.advisor import get_advise, LLMNotConfiguredError
+        except ImportError as exc:  # openai 依赖缺失等
+            app.logger.warning("智能体依赖缺失：%s", exc)
+            return _error("LLM_UNAVAILABLE", "投放建议服务尚未配置，请稍后重试。", 503)
+
+        try:
+            items, summary = get_advise(clean_detections, city, scene)
+        except LLMNotConfiguredError:
+            return _error("LLM_UNAVAILABLE", "投放建议服务尚未配置，请稍后重试。", 503)
+        except Exception as exc:  # 调用失败 / 输出不符合契约，不外泄细节
+            app.logger.warning("智能体生成建议失败：%s", exc)
+            return _error("ADVISE_FAILED", "生成投放建议失败，请重试。", 500)
+
+        return jsonify(
+            {
+                "request_id": request_id,
+                "items": items,
+                "summary": summary,
+                "elapsed_ms": _elapsed_ms(start_ts),
+            }
+        )
 
     # ---- mock 模式：返回固定映射建议 ----
     try:
