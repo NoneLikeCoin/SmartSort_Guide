@@ -182,15 +182,56 @@ def test_markdown_fenced_output_is_parsed(with_key, fake_client):
     assert len(items) == 2 and summary
 
 
-def test_non_json_output_raises(with_key, fake_client):
-    fake_client([final_response("建议您分类投放，谢谢。")])
-    with pytest.raises(LLMResponseError):
+def test_first_call_forces_tool_choice(with_key, fake_client):
+    """结构性保证：第一次调用必须 tool_choice=required（禁止单轮直接作答），
+    之后交还模型自主（auto）。"""
+    fake = fake_client(
+        [
+            tool_response([{"id": "c1", "name": "map_category", "args": {"class_name": "plastic"}}]),
+            final_response(json.dumps(FINAL_ITEMS, ensure_ascii=False)),
+        ]
+    )
+    get_advise(DETECTIONS, "changsha", "campus")
+    choices = [c["tool_choice"] for c in fake.chat.completions.calls]
+    assert choices == [advisor.FIRST_ROUND_TOOL_CHOICE, advisor.FOLLOWUP_TOOL_CHOICE]
+    assert choices[0] == "required"
+
+
+def test_correction_round_recovers_from_bad_output(with_key, fake_client):
+    """自我修正：最终输出非法 -> 把校验错误发回模型 -> 第二次重写成功。"""
+    fake = fake_client(
+        [
+            final_response("建议您把塑料瓶投进可回收物桶哦。"),  # 非法：纯文本
+            final_response(json.dumps(FINAL_ITEMS, ensure_ascii=False)),  # 修正后合法
+        ]
+    )
+    items, summary = get_advise(DETECTIONS, "changsha", "campus")
+    assert len(items) == 2 and summary
+
+    assert len(fake.chat.completions.calls) == 2
+    last_messages = fake.chat.completions.calls[-1]["messages"]
+    # 修正轮历史：非法输出作为 assistant 保留，错误说明作为 user 反馈
+    correction = [
+        m for m in last_messages
+        if m["role"] == "user" and "不符合要求" in m["content"]
+    ]
+    assert correction and "JSON" in correction[0]["content"]
+
+
+def test_bad_output_twice_raises(with_key, fake_client):
+    """修正轮用尽仍非法：抛 LLMResponseError（app 层转 500）。"""
+    fake = fake_client(
+        [final_response("今天天气不错"), final_response("还是不想输出 JSON")]
+    )
+    with pytest.raises(LLMResponseError) as excinfo:
         get_advise(DETECTIONS, "changsha", "campus")
+    assert "合法 JSON" in str(excinfo.value)
+    assert len(fake.chat.completions.calls) == 1 + advisor.MAX_CORRECTIONS
 
 
 def test_missing_class_coverage_raises(with_key, fake_client):
     partial = {"items": [FINAL_ITEMS["items"][0]], "summary": FINAL_ITEMS["summary"]}
-    fake_client([final_response(json.dumps(partial, ensure_ascii=False))])
+    fake_client([final_response(json.dumps(partial, ensure_ascii=False))] * 2)
     with pytest.raises(LLMResponseError):
         get_advise(DETECTIONS, "changsha", "campus")
 
@@ -198,7 +239,7 @@ def test_missing_class_coverage_raises(with_key, fake_client):
 def test_item_with_illegal_class_raises(with_key, fake_client):
     bad = json.loads(json.dumps(FINAL_ITEMS))
     bad["items"][0]["class"] = "banana"
-    fake_client([final_response(json.dumps(bad, ensure_ascii=False))])
+    fake_client([final_response(json.dumps(bad, ensure_ascii=False))] * 2)
     with pytest.raises(LLMResponseError):
         get_advise(DETECTIONS, "changsha", "campus")
 

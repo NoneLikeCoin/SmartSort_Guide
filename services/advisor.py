@@ -10,10 +10,14 @@
 """
 
 import json
+import logging
 import os
 
 from services import rules
 from services.rules import RulesError
+
+# 非敏感调用链日志：只记录调用次数，绝不输出密钥与消息内容
+logger = logging.getLogger("services.advisor")
 
 # ------------------------------------------------------------------ 调用常量
 
@@ -21,6 +25,13 @@ LLM_BASE_URL = "https://api.deepseek.com"
 LLM_MODEL = "deepseek-chat"
 REQUEST_TIMEOUT = 30.0  # 单次请求超时（秒）
 MAX_TOOL_ROUNDS = 6  # 工具循环上限，防失控
+MAX_CORRECTIONS = 1  # 输出校验失败后的自我修正轮数
+
+# 首轮强制模型发起工具调用（tool_choice="required"），使
+# "决策 -> 工具执行 -> 依据结果继续处理" 成为每次请求的结构性保证；
+# 后续轮次交还给模型自主决定（"auto"）。
+FIRST_ROUND_TOOL_CHOICE = "required"
+FOLLOWUP_TOOL_CHOICE = "auto"
 
 # ------------------------------------------------------------------ 异常定义
 
@@ -211,6 +222,11 @@ def get_advise(detections, city, scene):
         },
     ]
 
+    tool_choice = FIRST_ROUND_TOOL_CHOICE
+    model_calls = 0  # 大模型 API 调用次数（智能体步骤数的直接证据）
+    tool_execs = 0  # 本地工具执行次数
+    corrections = 0  # 输出自我修正次数
+
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             resp = client.chat.completions.create(
@@ -218,11 +234,19 @@ def get_advise(detections, city, scene):
                 messages=messages,
                 tools=TOOLS,
                 temperature=0.2,
+                tool_choice=tool_choice,
             )
         except Exception as exc:
             # openai 异常种类多（鉴权/网络/限流），统一收敛；
             # 不打印密钥，异常文本本身不含 key。
+            logger.warning(
+                "DeepSeek 调用失败：model calls=%d tools=%d err=%r",
+                model_calls, tool_execs, exc,
+            )
             raise LLMResponseError("调用 DeepSeek 失败：{}".format(exc)) from exc
+
+        model_calls += 1
+        tool_choice = FOLLOWUP_TOOL_CHOICE
 
         msg = resp.choices[0].message
         if msg.tool_calls:
@@ -251,6 +275,7 @@ def get_advise(detections, city, scene):
                 if not isinstance(arguments, dict):
                     arguments = {}
                 result = _run_tool(tc.function.name, arguments, city, scene)
+                tool_execs += 1
                 messages.append(
                     {
                         "role": "tool",
@@ -260,6 +285,41 @@ def get_advise(detections, city, scene):
                 )
             continue
 
-        return _parse_final(msg.content, detections)
+        try:
+            items, summary = _parse_final(msg.content, detections)
+        except LLMResponseError as exc:
+            # 自我修正：把校验错误反馈给模型，给它一次重写机会；
+            # 这本身就是"根据执行结果继续处理"的第二个证据。
+            if corrections >= MAX_CORRECTIONS:
+                logger.warning(
+                    "智能体输出校验失败且修正用尽：model calls=%d tools=%d",
+                    model_calls, tool_execs,
+                )
+                raise
+            corrections += 1
+            logger.info(
+                "输出校验失败，启动自我修正轮：%s（model calls=%d tools=%d）",
+                exc, model_calls, tool_execs,
+            )
+            messages.append({"role": "assistant", "content": msg.content or ""})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "上一次输出不符合要求：" + str(exc)
+                        + "。请修正后，只重新输出符合要求格式的最终 JSON，不要其他文字。"
+                    ),
+                }
+            )
+            continue
 
+        logger.info(
+            "智能体完成：model calls=%d, tool execs=%d, corrections=%d",
+            model_calls, tool_execs, corrections,
+        )
+        return items, summary
+
+    logger.warning(
+        "工具循环超过上限：model calls=%d tools=%d", model_calls, tool_execs
+    )
     raise LLMResponseError("工具调用超过 {} 轮仍未产出最终结果。".format(MAX_TOOL_ROUNDS))
